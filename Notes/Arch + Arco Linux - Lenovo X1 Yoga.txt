@@ -1,8 +1,14 @@
 Create a bootable USB Flash Drive:
 ----------------------------------
-Windows: rufus
-Windows/Mac/Linux: etcher
-Linux: See https://www.ostechnix.com/how-to-create-bootable-usb-drive-using-dd-command/
+Windows: 
+rufus
+
+Windows/Mac/Linux: 
+etcher
+
+Linux: 
+See https://www.ostechnix.com/how-to-create-bootable-usb-drive-using-dd-command/
+
 fdisk -l  (identify USB flash drive, assume it's /dev/sda below)
 mkfs.vfat /dev/sda –I  (format the USB flash drive if required)
 dd if=/path/to/iso/archlinux.iso of=/dev/sda bs=1M  (or 4M, etc)
@@ -15,6 +21,7 @@ https://www.sarducd.it/sardu-multiboot-builder
 They are listed in my preferred order.  
 Easy2Boot also runs on Linux.
 
+
 Boot using bootable USB Flash Drive:
 ------------------------------------
 Insert bootable USB flash drive
@@ -23,6 +30,7 @@ Press F12
 Choose the bootable USB flash drive
 Let the Arch install media run (will take a few minutes)
 You should be at the Linux terminal
+
 
 Set console font:
 -----------------
@@ -219,7 +227,8 @@ B) VirtualBox Installation:
 ---------------------------
 I like my VirtualBox installations to mirror my bare metal installations as much as possible.
 I feel this gives me the best "practice" for converting what I learned in my VB installations into a bare metal installation.
-My VB installations are almost always a single O/S installation, although creating a dual-boot virtual machine (say to practice multiboot installations) is certainly possible.
+My VB installations are almost always a single O/S installation, although creating a dual-boot virtual machine 
+   (say to practice multiboot installations) is certainly possible.
 So, my VB installs are UEFI installs with SSD hard disk.
 
 cgdisk /dev/nvme0n1
@@ -600,6 +609,7 @@ Install optional packages:
 pacman -S f2fs-tools
 pacman -S bash-completion
 pacman -S zsh
+pacman -S zsh-completions
 pacman -S vim
 
 Create User Account:
@@ -655,13 +665,13 @@ Do NOT run the AUR scripts yet (need to install an AUR helper, i.e. pacaur).
 
 To run the scripts, prefix the script name with ".", i.e.
 ./000-user-all-cores-makepkg-conf-v1.sh
-./100-
+./100-display-manager-and-desktop-v1.sh
 
 To launch XFCE:
 sudo startxfce4
 
 Launch XFCE, open the file containing these instructions, and paste the code to install PACAUR.
-I prefer pacaur over yaourt, including that I don't keep misspelling it :-/.
+I prefer pacaur over yaourt, including that I don't keep misspelling the command name :-/.
 
 Once you've installed pacaur, continue with the remaining scripts for XFCE, Openbox, and i3.
 
@@ -683,6 +693,3 @@ curl -o PKGBUILD https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=pacaur
 makepkg -i PKGBUILD --noconfirm
 cd
 rm -r ~/tmp
-
-
-
