@@ -1,0 +1,688 @@
+Create a bootable USB Flash Drive:
+----------------------------------
+Windows: rufus
+Windows/Mac/Linux: etcher
+Linux: See https://www.ostechnix.com/how-to-create-bootable-usb-drive-using-dd-command/
+fdisk -l  (identify USB flash drive, assume it's /dev/sda below)
+mkfs.vfat /dev/sda –I  (format the USB flash drive if required)
+dd if=/path/to/iso/archlinux.iso of=/dev/sda bs=1M  (or 4M, etc)
+
+See also below links to create a multiboot USB drive:
+http://www.easy2boot.com/
+https://www.pendrivelinux.com/yumi-multiboot-usb-creator/
+https://www.sarducd.it/sardu-multiboot-builder
+
+They are listed in my preferred order.  
+Easy2Boot also runs on Linux.
+
+Boot using bootable USB Flash Drive:
+------------------------------------
+Insert bootable USB flash drive
+Reboot
+Press F12
+Choose the bootable USB flash drive
+Let the Arch install media run (will take a few minutes)
+You should be at the Linux terminal
+
+Set console font:
+-----------------
+cd /usr/share/kbd/consolefonts
+ls *32*
+setfont *32*
+
+OR just:
+setfont /usr/share/kbd/consolefonts/*32*
+
+Preparation for dual booting or Linux re-install:
+-------------------------------------------------
+You can skip this step if you are wiping the entire hard disk,
+installing into VirtualBox (and wiping the entire hard disk),
+or installing on a new hard disk or USB with no other O/S.
+
+1) Backup UEFI partition:
+-------------------------
+This assumes backing up the existing UEFI partition to a USB flash drive.
+Adjust instructions as required.
+
+lsblk 
+Note the existing UEFI partition - 260MB - and USB flash drive - usually /dev/sda1
+cd /mnt
+mkdir boot usb
+mount /dev/nvme0n1p1 /mnt/boot
+mount /dev/sda1 /mnt/usb
+ls /mnt/boot (it should "look like" the UEFI partition)
+cp -R /mnt/boot/* /mnt/usb/Backups/UEFI_BACKUP_LNX
+ls -lR /mnt/usb/Backups/UEFI_BACKUP_LNX (verify the copy)
+du -sbh /mnt/boot /mnt/usb/Backups/UEFI_BACKUP_LNX (compare sizes)
+
+2) Remove old Linux boot loader entries (optional):
+(The reinstall will overwrite the old entries if they have the same bootloader-id)
+---------------------------------------------------
+This is only needed if the machine BIOS shows "old" Linux entries that are being uninstalled.  
+For example, I had to do this when I installed Fedora, then switched to Arch.
+If your machine BIOS is fine you can skip this step.
+
+efibootmgr (list boot manager entries)
+efibootmgr -b 0001 -B (remove boot manager entry 0001)
+   Make sure not to delete the Windows Boot Manager entry!
+efibootmgr (list again)
+
+cd /mnt/boot
+Remove any Linux entries, such as grub or loader
+
+cd EFI
+Remove any Linux entries, such as grub, systemd, or Linux
+rm -rf grub
+
+List the remaining files in /mnt/boot, looking for any Linux entries
+ls -LR | less (ignore anything under Microsoft)
+
+3) Remove old Linux images >>>(not optional):<<<
+---------------------------------------------
+If these files are not deleted a new base install will fail with the error:
+error: failed to commit transaction (conflicting files)
+linux: /mnt/boot/vmlinuz-linux exists in file system
+
+cd /mnt/boot
+rm initramfs-* vmlinuz-*
+
+4) Test that the Linux removal was successful:
+----------------------------------------------
+reboot
+   Remove any bootable USB drives
+   Press F12 - should not see any Linux in the NVRAM list
+   Should boot straight into Windows
+
+
+INSTALL LINUX:
+==============
+
+Boot USB Flash Drive (see above):
+---------------------------------
+
+Set console font:
+-----------------
+cd /usr/share/kbd/consolefonts
+ls *32*
+setfont *32*
+showconsolefont
+
+Verify the boot mode:
+---------------------
+ls /sys/firmware/efi/efivars (should see output)
+
+Verify KVM support:
+-------------------
+grep --color vmx /proc/cpuinfo (should see vmx text)
+
+Configure wireless network:
+---------------------------
+ping -c3 x.org
+
+If that doesn't work:
+wifi-menu
+<SSID>/<password>
+ping -c3 x.org
+
+Update the system clock:
+------------------------
+timedatectl set-ntp true
+
+Partition the hard disk:
+------------------------
+I have an SSD, so the device names begin with nvme0n1*.
+Adjust for your system as required.
+
+In the below partitioning scheme, I'm creating:
+
+100GB partition for all of Linux
+No separate partitions for home/tmp/var/usr/etc.
+Remainder of the partition for a separate Data partition, where large files are saved (mainly VirtualBox or QEMU images).
+I want to regularly backup this separate data partition to external USB drive and/or NAS.
+
+I don't use a swap partition, but use a swap file instead.
+See https://wiki.archlinux.org/index.php/swap, and in particular the text:
+"Note: There is no performance advantage to either a contiguous swap file or a partition, both are treated the same way."
+
+There are many ways to partition your hard drive, so adjust the below to suit your preferences.
+
+
+Option #1 (regular partitions):
+-------------------------------
+cgdisk /dev/nvme0n1
+100GB for Linux
+Remainder for Data
+See below for creating a swap file.
+
+Option #2 (unencrypted LVM):
+----------------------------
+cgdisk /dev/nvme0n1
+Create a single Linux partition for all things Linux
+See below for creating LVM partitions.
+
+Option #3 (encrypted partition + LVM):
+--------------------------------------
+This is the option I chose, so some of the other instructions below
+(esp. grub hooks) pertain to this approach.
+I don't give separate instructions for Options #1 and #2.
+
+If encryption is desired, do this ***before setting up LVM***
+https://wiki.archlinux.org/index.php/Dm-crypt/Encrypting_an_entire_system#Overview
+
+Regardless of the two approaches below, the /boot partition must be unencrypted.
+
+A) "Bare Metal" Installation:
+-----------------------------
+Note I am dual-booting Windows using UEFI.  
+I already have a separate, unencrypted (FAT32) partition from my Windows installation.
+So, I don't have to create a separate boot partition - I will "reuse" the current Windows boot partition.
+The partition I created for Linux from within Windows (using MiniTool Partition Wizard) is the 4th SSD partition, i.e. /dev/nvme0n1p4.
+
+Encrypt the Linux partition:
+----------------------------
+
+Short form:
+-----------
+cryptsetup -v -c aes-xts-plain64 -s 512 -h sha512 -i 5000 --use-random luksFormat /dev/nvme0n1p4 (entire Linux partition)
+<passphrase>
+cryptsetup open /dev/nvme0n1p4 crypt
+
+Long form:
+----------
+cryptsetup --verbose --cipher aes-xts-plain64 --key-size 512 --hash sha512 --iter-time 5000 --use-random luksFormat /dev/nvme0n1p4 (entire Linux partition)
+<passphrase>
+cryptsetup open /dev/nvme0n1p4 crypt
+
+Check and optionally fix partition order:
+-----------------------------------------
+cgdisk /dev/nvme0n1
+check that the partition numbers are in the correct order
+
+To reorder partitions:
+----------------------
+fdisk /dev/nvme0n1
+x
+f
+r
+w
+q
+
+If you are prompted to reboot, the safest thing is to reboot.
+However, you can also do:
+
+partprobe
+fdisk -l /dev/nvme0n1
+
+Check if the partitions are now listed in the correct order.
+
+B) VirtualBox Installation:
+---------------------------
+I like my VirtualBox installations to mirror my bare metal installations as much as possible.
+I feel this gives me the best "practice" for converting what I learned in my VB installations into a bare metal installation.
+My VB installations are almost always a single O/S installation, although creating a dual-boot virtual machine (say to practice multiboot installations) is certainly possible.
+So, my VB installs are UEFI installs with SSD hard disk.
+
+cgdisk /dev/nvme0n1
+512MB for /boot, FAT32, flag as boot partition
+Remainder for Linux, EXT4
+
+Then encrypt /dev/nvme0n1p2 as per bare metal instructions above.
+
+C) Both "Bare Metal" or VirtualBox installations:
+-------------------------------------------------
+
+Create logical partitions:
+Logical Volume Manager (LVM):
+-----------------------------
+The encrypted partition must currently be unlocked.
+If not, issue the command (from above);
+cryptsetup open /dev/nvme0n1p4 crypt (/dev/nvme0n1p2 for VB)
+
+pvcreate /dev/mapper/crypt
+pvdisplay
+
+vgcreate vg00 /dev/mapper/crypt (I like a short volume group name)
+vgdisplay
+
+lvcreate -L 100G -n Root vg00
+lvcreate -l 100%FREE -n Data vg00
+lvdisplay
+
+lsblk (check the partitions)
+
+Format the partitions:
+----------------------
+mkfs.ext4 /dev/mapper/vg00-Root
+mkfs.ext4 /dev/mapper/vg00-Data
+
+>>> ONLY DO THIS IN A VIRTUAL MACHINE <<<
+>>> DO ***NOT*** DO THIS FOR A BARE METAL INSTALL <<<
+>>> YOU DID BACKUP THE UEFI PARTITION, RIGHT??? <<<
+mkfs.fat -F 32 /dev/nvme0n1p1
+
+Mount the file systems:
+-----------------------
+mount /dev/mapper/vg00-Root /mnt
+cd /mnt
+mkdir -p boot data 
+mount /dev/mapper/vg00-Data /mnt/data
+mount ***/dev/nvme0n1p1*** /mnt/boot (make sure this is the UEFI partition)
+ls -R /mnt/boot/EFI (should see a Microsoft directory)
+
+Optional: 
+Mount my NAS shared folders.
+These instructions are on my NAS, and I can access them during installation via virtual console #2 (Alt-F2)
+I also keep a pacman cache on the NAS to speed up installs.
+
+mkdir -p nfs/scott nfs/pkg
+mount 192.168.0.100:scott /mnt/nfs/scott
+mount 192.168.0.100:pkg /mnt/nfs/pkg
+ls /mnt/nfs/pkg (should see Arch packages)
+
+Create swap file:
+-----------------
+I have 16GB of RAM, adjust size as required.
+For my use, I want it large enough to suspend to disk.
+
+fallocate -l 8G /mnt/swapfile 
+dd if=/dev/zero of=/swapfile bs=1M count=8192 (alternative command to fallocate but slower)
+chmod 600 /mnt/swapfile
+mkswap /mnt/swapfile
+swapon /mnt/swapfile
+
+Later, make sure /etc/fstab has:
+/swapfile none swap defaults 0 0
+
+List mounted files:
+-------------------
+findmnt
+
+Select the mirrors:
+-------------------
+Several approaches:
+
+Option #1: (reliable but takes a LONG time)
+cd /etc/pacman.d
+cp mirrorlist mirrorlist.original
+cp mirrorlist mirrorlist.backup
+
+sed -i 's/^#Server/Server/' mirrorlist.backup
+rankmirrors -n 6 mirrorlist.backup > mirrorlist (this can take a LONG time)
+
+Option #2: (copy an old mirrors files from my NAS)
+sftp <login details>
+cd /share/homes/scott/Software/Linux/Files/pacman.d
+mget mirrorlist
+bye
+
+Option #3:
+Just uncomment the entry for ftp.swin.edu.au, it is usually the fastest
+
+One approach is to use Option #3 for a quick install, then run Option #1 post-installation.
+
+Edit pacman.conf:
+-----------------
+I like to use a local cache, either on my NAS or an external USB flash drive.
+This way, I only do a download once; subsequent installs use the cache.
+A caveat is that old packages can become deprecated and fail integrity checks.  This may require manual deletion of these old packages.
+
+cp /etc/pacman.conf /etc/pacman.conf.original
+vi /etc/pacman.conf
+
+[options]
+CacheDir = /nfs/pkg, OR
+CacheDir = /mnt/nfs/pkg, OR
+CacheDir = <some mount point for the local cache>
+
+# Misc options (uncomment or add these to Misc options)
+Color
+CheckSpace
+ILoveCandy
+
+Using a local repository (USB):
+-------------------------------
+I don't really use this approach anymore, but I leave these instructions here.
+Note that a local *repository* is different than a local *cache*
+
+To create:
+==========
+mkdir /mnt/usb
+mount <usbdrive> /mnt/usb
+cd /mnt/usb/Packages
+pacman -Syw base grub --cachedir .
+repo-add ./custom.db.tar.gz ./*
+
+To use:
+=======
+mkdir /mnt/repo
+mount /dev/sdxY /mnt/repo
+
+vi /etc/pacman.conf
+
+Add this repository *before* the other ones:
+[custom]
+SigLevel = PackageRequired
+Server = file:///mnt/repo/Packages
+
+Refresh the keys:
+-----------------
+Optional, run if you encounter any package integrity issues, esp. with an old ISO or local pacman cache
+
+pacman -S archlinux-keyring
+
+pacman-key --populate archlinux
+pacman-key --refresh-keys (takes a while to run)
+
+Synchronize the pacman database:
+--------------------------------
+pacman -Syy
+
+Install the base packages:
+--------------------------
+pacstrap -c -i /mnt base
+
+Generate fstab:
+---------------
+genfstab -U /mnt >> /mnt/etc/fstab
+vi /mnt/etc/fstab (check the contents)
+Make sure it says /swapfile and not /mnt/swapfile
+
+chroot:
+-------
+arch-chroot /mnt
+
+Edit mirrorlist and pacman.conf:
+--------------------------------
+Edit the installed mirrorlist and pacman.conf as above.
+Uncomment the [multilib] section of pacman.conf.
+
+pacman -Syy
+
+Set console font:
+-----------------
+vi /etc/vconsole.conf
+KEYMAP=us
+FONT=latarcyrheb-sun32
+
+Additional Required Packages:
+-----------------------------
+pacman -S base-devel
+pacman -S nfs-utils
+pacman -S linux-lts
+pacman -S linux-lts-headers
+
+Of course, these can be combined on one line.
+
+Time Zone:
+----------
+tzselect  6/6/1
+ln -sf /usr/share/zoneinfo/Australia/Sydney /etc/localtime
+hwclock --systohc --utc
+
+Locale:
+-------
+vi /etc/locale.gen
+Uncomment en_US and en_AU UTF-8 locales
+locale-gen
+vi /etc/locale.conf
+LANG=en_AU.UTF-8
+
+Hostname:
+---------
+vi /etc/hostname
+genesis (In the beginning, there was ... ArchLinux) (adjust machine name as desired)
+
+OR
+
+hostnamectl set-hostname genesis
+
+vi /etc/hosts
+#
+# /etc/hosts: static lookup table for host names
+#
+
+#<ip-address>		<hostname.domain.org>	<hostname>
+127.0.0.1		localhost.localdomain	localhost
+::1			localhost.localdomain	localhost
+
+127.0.0.1		genesis.localdomain		genesis
+::1			genesis.localdomain		genesis
+
+192.168.0.100		nas-scott.localdomain	nas-scott
+
+# End of file
+
+Network Configuration:
+----------------------
+pacman -S networkmanager
+pacman -S network-manager-applet
+pacman -S dhclient
+
+systemctl enable NetworkManager
+
+Initramfs:
+----------
+vi /etc/mkinitcpio.conf
+HOOKS=(base udev autodetect modconf consolefont keymap keyboard block encrypt lvm2 filesystems fsck shutdown)
+mkinitcpio -p linux
+mkinitcpio -p linux-lts
+
+Boot Loader:
+------------
+pacman -S grub efibootmgr os-prober
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=Linux
+
+vi /etc/default/grub
+GRUB_DEFAULT=saved
+GRUB_TIMEOUT=10
+GRUB_CMDLINE_LINUX_DEFAULT="verbose" (change from "quiet")
+GRUB_CMDLINE_LINUX="<see below>"
+GRUB_SAVEDEFAULT="true"
+
+Add encrypted partition UUID to /etc/default/grub.
+This is the UUID of the root *partition* not root LVM, i.e. /dev/nvme0n1p4, not /dev/mapper/vg00-Root.
+
+ls -l /dev/disk/by-uuid or
+lsblk -f
+blkid
+
+Example:
+
+522002fb-80ed-4aca-b11c-6241bcff2e16 -> ../../nvme0n1
+
+OR
+
+GRUB_CMDLINE_LINUX="cryptdevice=UUID=522002fb-80ed-4aca-b11c-6241bcff2e16:crypt root=/dev/mapper/vg00-Root
+
+If that fails:
+
+GRUB_CMDLINE_LINUX="cryptdevice=/dev/nvme0n1p4:crypt root=/dev/mapper/vg00-Root
+
+Note: it's just too hard to type in a UUID during the install, without a terminal that supports cut-and-paste.  
+Use the 2nd approach during installation, then use the UUID approach post-installation once a graphical terminal is available.
+
+Also review the contents of /etc/grub.d/
+
+Generate the grub configuration file:
+-------------------------------------
+grub-mkconfig -o /boot/grub/grub.cfg
+
+Fix bug in VirtualBox:
+----------------------
+This is only needed for a VirtualBox installation.
+See https://wiki.archlinux.org/index.php/VirtualBox#Installation_in_EFI_mode for a description of the VirtualBox bug.
+This is the easiest solution (rather than writing a startup.nsh script):
+cp /boot/EFI/Linux/grubx64.efi /boot/EFI/bootx64.efi
+
+Set root password:
+------------------
+passwd
+
+Restart System:
+---------------
+exit
+umount -R /mnt
+shutdown now (esp. for VirtualBox)
+
+
+POST-INSTALLATION:
+==================
+
+Network Configuration:
+----------------------
+THIS IS NOT NEEDED FOR VMs, THERE IS NO WIRELESS CARD!
+
+See https://wiki.archlinux.org/index.php/NetworkManager
+
+Note that I am installing on a laptop.
+A wired connection is possible, but requires a dongle, and my router is in another room.
+Getting this to work via wireless is much easier and my preferred approach.
+
+Note that there must just be one application controlling the network, or conflicts will occur.
+During installation, netctl and wifi-menu are controlling the wireless network.
+Post-installation we are using NetworkManager instead.
+Run the below steps:
+
+Start NetworkManager:
+=====================
+systemctl status NetworkManager
+If not started:
+systemctl start NetworkManager
+ping -c3 x.org
+
+If that doesn't work, use the Network Manager Command Line interface to connect:
+nmcli dev wifi connect <SSID> password <password>
+ping -c3 x.org
+
+
+Optional: Below is just for information only
+Change device name (optional but could be useful):
+vi /etc/udev/rules.d/10-network.rules
+
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="aa:bb:cc:dd:ee:ff", NAME="net1"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="ff:ee:dd:cc:bb:aa", NAME="net0"
+
+A couple of things to note:
+
+To get the MAC address of each card, use this command: 
+cat /sys/class/net/wlp4s0/address
+
+Make sure to use the lower-case hex values in your udev rules. It doesn't like upper-case.
+
+Enabling and disabling network interfaces:
+You can activate or deactivate network interfaces using:
+
+# ip link set wlp4s0 up
+# ip link set wlp4s0 down
+
+To check the result:
+
+$ ip link show dev wlp4s0
+
+Update system:
+--------------
+pacman -Syu
+
+Regenerate the grub configuration file:
+---------------------------------------
+During installation, and while in the chroot environment, os-prober does not detect the existence of Windows.
+
+grub-mkconfig -o /boot/grub/grub.cfg
+shutdown now
+
+Check that you can boot using all grub options (test all of them)
+(which should now include Windows)
+uname -a in the linux and linux-lts kernels to compare kernel versions
+
+
+Install optional packages:
+--------------------------
+pacman -S f2fs-tools
+pacman -S bash-completion
+pacman -S zsh
+pacman -S vim
+
+Create User Account:
+--------------------
+useradd -m -g users -G wheel -s /bin/zsh scott
+passwd scott
+visudo
+Make sure wheel is uncommented
+%wheel ALL=(ALL) ALL
+
+Install X Server:
+-----------------
+pacman -S xorg-server xorg-apps xorg-xinit xterm
+
+
+INSTALL ARCOLINUX SPICES:
+-------------------------
+See https://wiki.archlinux.org/index.php/git
+
+su scott
+sudo pacman -S git
+
+git config --global user.name  "John Doe"
+git config --global user.email "johndoe@example.com"
+
+mkdir -p ~/git/ArcoLinux
+cd ~/git/ArcoLinux
+mkdir arcolinux arcolinuxd
+
+# example single repository
+cd ~/git/ArcoLinux/arcolinux
+git clone https://github.com/arcolinux/arcolinux-conky-collection
+
+# example script to download the entire arcolinuxd collection
+See https://stackoverflow.com/questions/19576742/how-to-clone-all-repos-at-once-from-github (scroll down)
+
+cd ~/git/ArcoLinux/arcolinuxd
+CNTX=users; NAME=arcolinuxd; PAGE=1
+curl "https://api.github.com/$CNTX/$NAME/repos?page=$PAGE&per_page=100" |
+  grep -e 'git_url*' |
+  cut -d \" -f 4 |
+  xargs -L1 git clone
+
+
+INSTALL DESKTOP ENVIRONMENT:
+============================
+I want to duplicate the Phase I ArcoLinux install.
+So I will install XFCE, OpenBox, and i3.
+
+Find the cloned XFCE repository.
+READ and run the installation scripts.
+Do NOT run the AUR scripts yet (need to install an AUR helper, i.e. pacaur).
+
+To run the scripts, prefix the script name with ".", i.e.
+./000-user-all-cores-makepkg-conf-v1.sh
+./100-
+
+To launch XFCE:
+sudo startxfce4
+
+Launch XFCE, open the file containing these instructions, and paste the code to install PACAUR.
+I prefer pacaur over yaourt, including that I don't keep misspelling it :-/.
+
+Once you've installed pacaur, continue with the remaining scripts for XFCE, Openbox, and i3.
+
+Install PACAUR:
+---------------
+See https://www.ostechnix.com/install-pacaur-arch-linux/
+
+For some unknown reason, the curl downloads failed under zsh, but worked under bash.
+
+As a normal user (not root):
+
+sudo pacman -S expac yajl --noconfirm
+mkdir ~/tmp
+cd ~/tmp/
+gpg --recv-keys --keyserver hkp://pgp.mit.edu 1EB2638FF56C0C53
+curl -o PKGBUILD https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=cower
+makepkg -i PKGBUILD --noconfirm
+curl -o PKGBUILD https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=pacaur
+makepkg -i PKGBUILD --noconfirm
+cd
+rm -r ~/tmp
+
+
+
